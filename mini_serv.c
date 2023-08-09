@@ -1,155 +1,139 @@
-#include <unistd.h>
+#include <errno.h>
 #include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
+#include <stdio.h>
+#include <sys/select.h>
+#include <stdlib.h>
 
-int max_fd = 0, g_id = 0; 
-int id[65536], currmsg[65536], sock_fd = -1;
-
-fd_set fdread, fdwrite, currentsock;
-char buf[4096 * 42], msg[4096 * 42 + 42], str[4096 * 42];
-
-// ==> Send the message stock on fdwrite by sprintf, to every client except one
-void sendAll(int except) 
+typedef struct s_clients
 {
-	for (int fd = 0; fd <= max_fd; fd++)
-		if (FD_ISSET(fd, &fdwrite) && except != fd)
-			send(fd, msg, strlen(msg), 0);
-}
+	int id;
+	char msg[1024];
+}	t_clients;
 
-// ==> Classic fatal Error
-void fatal() 
+t_clients clients[1024];
+char buff_write[120000], buff_read[1200000];
+int max_fd = 0;
+fd_set fd_write, fd_read, active;
+
+void ft_error(char *str)
 {
-	write(2, "Fatal error\n", strlen("Fatal error\n"));
-	close(sock_fd);
+	if (str)
+		write(2, str, strlen(str));
+	else
+		write(2, "Fatal error", 11);
+	write(2, "\n", 1);
 	exit(1);
 }
 
-int main(int argc, char **argv)
+void send_all(int except)
 {
-	// ========== ESTABLISHING CONNEXION 📡 =========== //
+	for (int fd = 0; fd <= max_fd; fd++)
+		if (FD_ISSET(fd, &fd_write) && fd != except)
+			send(fd, buff_write, strlen(buff_write), 0);
+}
 
-	// ==> Wrong number of arguments check
-	if(argc != 2)
+int main (int argc, char **argv) 
+{
+	if (argc != 2)
 	{
-		write(2, "Wrong number of arguments\n", strlen("Wrong number of arguments\n"));
-		exit(1);
+		ft_error("Wrong number of arguments");
 	}
 
-	// ==> Create every server details (port, IP)
-	uint16_t port = atoi(argv[1]);
-	struct sockaddr_in serveraddr;
-	serveraddr.sin_family = AF_INET;
-	serveraddr.sin_addr.s_addr = htonl(2130706433);
-	serveraddr.sin_port = htons(port);
+	int sock_fd, connfd, len;
+	struct sockaddr_in servaddr;
+	int next_id = 0; 
 
-	if ((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) // find the socket server
-		fatal();
-	if (bind(sock_fd, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) == -1) // bind the socket to the good port with sockaddr struct
-		fatal();
-	if (listen(sock_fd, 128) == -1) // listen to server socket
-		fatal();
-	
-	// set to zero everything we need
-	bzero(id, sizeof(id));
-	FD_ZERO(&currentsock);
-	FD_SET(sock_fd, &currentsock);
+	// socket create and verification 
+	sock_fd = socket(AF_INET, SOCK_STREAM, 0); 
+	if (sock_fd == -1)
+		ft_error(0);
+
+	// Utilisé pour select
 	max_fd = sock_fd;
 
-	// ========== CONNEXION SET ✅ =========== //
+	// On initialise tout
+	bzero(&servaddr, sizeof(servaddr)); 
+	bzero(&clients, sizeof(clients));
+	bzero(&buff_write, sizeof(buff_write));
+	bzero(&buff_read, sizeof(buff_read));
+	FD_ZERO(&active);
 
-	// ========== TREAT ENTRANCE MESSAGE =========== //
-	while(1)
+	FD_SET(sock_fd, &active);
+
+	// assign IP, PORT 
+	servaddr.sin_family = AF_INET; 
+	servaddr.sin_addr.s_addr = htonl(2130706433); //127.0.0.1
+	servaddr.sin_port = htons(atoi(argv[1])); 
+  
+	// Binding newly created socket to given IP and verification 
+	if ((bind(sock_fd, (const struct sockaddr *)&servaddr, sizeof(servaddr))) != 0)
+		ft_error(0);
+	if (listen(sock_fd, 10) != 0)
+		ft_error(0);
+	len = sizeof(servaddr);
+
+	// Boucle principale
+	while (1)
 	{
-		fdwrite = fdread = currentsock;
-		if (select(max_fd + 1, &fdread, &fdwrite, 0, 0) <= 0)
+		fd_read = fd_write = active;
+		if (select(max_fd + 1, &fd_read, &fd_write, NULL, NULL) < 0)
 			continue;
-		// for all clients
-		for (int fd = 0; fd <= max_fd; fd++) 
+
+		for (int fd = 0; fd <= max_fd; fd++)
 		{
-			// if the client is ready to be read
-			if (FD_ISSET(fd, &fdread))
+			if (FD_ISSET(fd, &fd_read) == 0)
+				continue ;
+			// new connection
+			if (fd == sock_fd)
 			{
-				// if the actuel client (ready to be read) is the server one (means a new connexion)
-				if (fd == sock_fd)
+				// On va accepter la connexion!
+				connfd = accept(sock_fd, (struct sockaddr *)&servaddr, &len);
+				if (connfd < 0)
+					continue;
+
+				clients[connfd].id = next_id++;
+				sprintf(buff_write, "server: client %d just arrived\n", clients[connfd].id);
+				send_all(connfd);
+				FD_SET(connfd, &active);
+				if (connfd > max_fd)
+					max_fd = connfd;
+				bzero(&buff_write, sizeof(buff_write));
+			}
+			// client sent shit
+			else
+			{
+				int res = recv(fd, &buff_read, 65536, 0);
+				// Client is disconnecting
+				if (res <= 0) // Le client se deconnecte !
 				{
-					// create a struct to stock new client
-					struct sockaddr_in clientaddr;
-					socklen_t len = sizeof(clientaddr);
-
-					// accept the client
-					int clientfd = accept(fd, (struct sockaddr*)&clientaddr, &len);
-					if (clientfd == -1)
-						continue;
-					
-					// put the client into active_sockets
-					FD_SET(clientfd, &currentsock);
-					id[clientfd] = g_id++;
-					currmsg[clientfd] = 0;
-					if(max_fd < clientfd)
-					max_fd = clientfd;
-
-					// sending message to all clients
-					sprintf(msg, "server: client %d just arrived\n", id[clientfd]);
-					sendAll(fd);
-					break;
+					sprintf(buff_write, "server: client %d just left\n", clients[fd].id);
+					send_all(fd);
+					FD_CLR(fd, &active);
+					close(fd);
 				}
-				// else the sock is ready to be read but it's not the server one (means the client is left or send a message to treat)
+				// Client sent a message
 				else
 				{
-					// catch the message of the socket
-					int ret = recv(fd, buf, 4096 * 42, 0);
-
-					// if the lenght of message is <= than 0, it's mean the client left
-					if (ret <= 0)
+					for (int i = 0, j = strlen(clients[fd].msg); i < res; i++, j++)
 					{
-						sprintf(msg, "server: client %d just left\n", id[fd]);
-						sendAll(fd);
-
-						// clear this client from active_socket & close the client socket.
-						FD_CLR(fd, &currentsock);
-						close(fd);
-						break;
-					}
-					// else there is a message to treat
-					else
-					{
-						// for every character of the message
-						for (int i = 0, j = 0; i < ret; i++, j++)
+						clients[fd].msg[j] = buff_read[i];
+						if (clients[fd].msg[j] == '\n')
 						{
-							// copy it into str
-							str[j] = buf[i];
-
-							// if there is a \n, we send a line with all the text to \n
-							if (str[j] == '\n')
-							{
-								str[j+1] = '\0';
-								if(currmsg[fd])
-									sprintf(msg, "%s", str);
-								else
-									sprintf(msg, "client %d: %s", id[fd], str);
-								currmsg[fd] = 0;
-								sendAll(fd);
-								j = -1;
-							}
-							// if this is the last character of the message and it's not ending by a \n (means we need to send it without \n)
-							else if (i == (ret - 1))
-							{
-								str[j+1] = '\0';
-								if (currmsg[fd])
-									sprintf(msg, "%s", str);
-								else
-									sprintf(msg, "client %d: %s", id[fd], str);
-								currmsg[fd] = 1;
-								sendAll(fd);
-								break;
-							}
+							clients[fd].msg[j] = '\0';
+							sprintf(buff_write, "client %d: %s\n", clients[fd].id, clients[fd].msg);
+							send_all(fd);
+							bzero(&clients[fd].msg, sizeof(clients[fd].msg));
+							j = -1;
 						}
 					}
 				}
 			}
+			break;
 		}
-	}
-	return(0);
+	}	
 }
+
