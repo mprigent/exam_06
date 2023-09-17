@@ -1,9 +1,9 @@
 #include <string.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 typedef struct client {
 	int id;
@@ -69,14 +69,14 @@ int main(int argc, char **argv)
 		{
 			if (FD_ISSET(fd, &readyRead) && fd == serverSock)
 			{
-				int clientSocket = accept(serverSock, NULL, NULL);
-				if (clientSocket < 0)
+				int clientSock = accept(serverSock, NULL, NULL);
+				if (clientSock < 0)
 					continue;
-				max = (clientSocket > max) ? clientSocket : max;
-				clients[clientSocket].id = next_id++;
-				FD_SET(clientSocket, &active);
-				sprintf(bufWrite, "server: client %d just arrived\n", clients[clientSocket].id);
-				sendAll(clientSocket);
+				max = (clientSock > max) ? clientSock : max;
+				clients[clientSock].id = next_id++;
+				FD_SET(clientSock, &active);
+				sprintf(bufWrite, "server: client %d just arrived\n", clients[clientSock].id);
+				sendAll(clientSock);
 				break;
 			}
 			if (FD_ISSET(fd, &readyRead) && fd != serverSock)
