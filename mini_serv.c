@@ -49,7 +49,6 @@ int main(int argc, char **argv)
 	FD_SET(serverSock, &active);
 
 	struct sockaddr_in addr;
-	socklen_t addr_len = sizeof(addr);
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = (1 << 24) + 127; // "127.0.0.1", in network order
 	addr.sin_port = htons(port);
